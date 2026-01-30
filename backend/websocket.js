@@ -1,7 +1,10 @@
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const { mockExecAsync } = require('./mock-clawdbot');
 
-const execAsync = promisify(exec);
+const realExecAsync = promisify(exec);
+const USE_MOCK = process.env.NODE_ENV === 'production' || process.env.MOCK_CLAWDBOT === 'true';
+const execAsync = USE_MOCK ? mockExecAsync : realExecAsync;
 
 let wss = null;
 let agentStatusInterval = null;

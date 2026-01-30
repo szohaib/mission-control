@@ -5,9 +5,18 @@ const { v4: uuidv4 } = require('uuid');
 const { getDatabase } = require('../database');
 const { broadcastAgentStatus } = require('../websocket');
 const { logActivity } = require('../utils/activity');
+const { mockExecAsync } = require('../mock-clawdbot');
 
-const execAsync = promisify(exec);
+const realExecAsync = promisify(exec);
 const router = express.Router();
+
+// Use mock in production or when MOCK_CLAWDBOT is set
+const USE_MOCK = process.env.NODE_ENV === 'production' || process.env.MOCK_CLAWDBOT === 'true';
+const execAsync = USE_MOCK ? mockExecAsync : realExecAsync;
+
+if (USE_MOCK) {
+  console.log('⚠️  Using mock Clawdbot data (Railway deployment mode)');
+}
 
 // Get all agents with status
 router.get('/', async (req, res) => {
