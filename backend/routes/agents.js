@@ -1,28 +1,50 @@
 const express = require('express');
-const { exec } = require('child_process');
-const { promisify } = require('util');
 const { v4: uuidv4 } = require('uuid');
 const { getDatabase } = require('../database');
 const { broadcastAgentStatus } = require('../websocket');
 const { logActivity } = require('../utils/activity');
-const { mockExecAsync } = require('../mock-clawdbot');
+const { getGatewayClient } = require('../clawdbot-gateway-client');
 
-const realExecAsync = promisify(exec);
 const router = express.Router();
 
-// Use mock in production or when MOCK_CLAWDBOT is set
-const USE_MOCK = process.env.NODE_ENV === 'production' || process.env.MOCK_CLAWDBOT === 'true';
-const execAsync = USE_MOCK ? mockExecAsync : realExecAsync;
+// Get Gateway client (connects to real Clawdbot or uses mock in fallback)
+const gateway = getGatewayClient();
 
-if (USE_MOCK) {
-  console.log('⚠️  Using mock Clawdbot data (Railway deployment mode)');
-}
+// Fallback to mock data if gateway unavailable
+let useMock = false;
+const mockAgents = [
+  {
+    id: 'agent-main-001',
+    label: 'main',
+    status: 'running',
+    model: 'claude-sonnet-4-5',
+    created: Date.now() - 3600000,
+    lastActivity: Date.now() - 300000
+  }
+];
+
+gateway.on('connected', () => {
+  console.log('✅ Using real Clawdbot Gateway API');
+  useMock = false;
+});
+
+gateway.on('error', () => {
+  if (!useMock) {
+    console.log('⚠️  Gateway unavailable, using mock data');
+    useMock = true;
+  }
+});
 
 // Get all agents with status
 router.get('/', async (req, res) => {
   try {
-    const { stdout } = await execAsync('clawdbot sessions list --json');
-    const sessions = JSON.parse(stdout);
+    let sessions;
+    
+    if (useMock || !gateway.connected) {
+      sessions = mockAgents;
+    } else {
+      sessions = await gateway.listSessions();
+    }
 
     // Enrich with metrics from database
     const db = getDatabase();
@@ -58,9 +80,13 @@ router.get('/', async (req, res) => {
 // Get single agent details
 router.get('/:id', async (req, res) => {
   try {
-    const { stdout } = await execAsync(`clawdbot sessions list --json`);
-    const sessions = JSON.parse(stdout);
-    const agent = sessions.find(s => s.id === req.params.id);
+    let agent;
+    
+    if (useMock || !gateway.connected) {
+      agent = mockAgents.find(a => a.id === req.params.id);
+    } else {
+      agent = await gateway.getSession(req.params.id);
+    }
 
     if (!agent) {
       return res.status(404).json({ error: 'Agent not found' });
@@ -91,10 +117,25 @@ router.post('/spawn', async (req, res) => {
       return res.status(400).json({ error: 'Label and task required' });
     }
 
-    const modelFlag = model ? `--model ${model}` : '';
-    const { stdout } = await execAsync(
-      `clawdbot sessions spawn --label "${label}" ${modelFlag} --task "${task}"`
-    );
+    let result;
+    
+    if (useMock || !gateway.connected) {
+      result = {
+        id: `agent-${Date.now()}`,
+        label,
+        status: 'running',
+        model: model || 'claude-sonnet-4',
+        created: Date.now(),
+        lastActivity: Date.now()
+      };
+      mockAgents.push(result);
+    } else {
+      result = await gateway.spawnSession({
+        label,
+        task,
+        model
+      });
+    }
 
     // Log activity
     logActivity({
@@ -108,7 +149,7 @@ router.post('/spawn', async (req, res) => {
 
     broadcastAgentStatus();
 
-    res.json({ success: true, output: stdout });
+    res.json({ success: true, agent: result });
   } catch (error) {
     console.error('Error spawning agent:', error);
     res.status(500).json({ error: 'Failed to spawn agent' });
@@ -119,7 +160,15 @@ router.post('/spawn', async (req, res) => {
 router.post('/:id/kill', async (req, res) => {
   try {
     const { id } = req.params;
-    await execAsync(`clawdbot sessions kill ${id}`);
+    
+    if (useMock || !gateway.connected) {
+      const index = mockAgents.findIndex(a => a.id === id);
+      if (index !== -1) {
+        mockAgents.splice(index, 1);
+      }
+    } else {
+      await gateway.killSession(id);
+    }
 
     // Log activity
     logActivity({
@@ -149,7 +198,11 @@ router.post('/:id/send', async (req, res) => {
       return res.status(400).json({ error: 'Message required' });
     }
 
-    await execAsync(`clawdbot sessions send ${id} "${message}"`);
+    if (useMock || !gateway.connected) {
+      // Mock: just acknowledge
+    } else {
+      await gateway.sendMessage(id, message);
+    }
 
     res.json({ success: true });
   } catch (error) {
@@ -162,8 +215,13 @@ router.post('/:id/send', async (req, res) => {
 router.get('/:id/transcript', async (req, res) => {
   try {
     const { id } = req.params;
-    const { stdout } = await execAsync(`clawdbot sessions transcript ${id} --json`);
-    const transcript = JSON.parse(stdout);
+    let transcript;
+    
+    if (useMock || !gateway.connected) {
+      transcript = [];
+    } else {
+      transcript = await gateway.getTranscript(id);
+    }
 
     res.json(transcript);
   } catch (error) {

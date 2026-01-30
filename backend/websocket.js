@@ -1,13 +1,37 @@
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const { mockExecAsync } = require('./mock-clawdbot');
-
-const realExecAsync = promisify(exec);
-const USE_MOCK = process.env.NODE_ENV === 'production' || process.env.MOCK_CLAWDBOT === 'true';
-const execAsync = USE_MOCK ? mockExecAsync : realExecAsync;
+const { getGatewayClient } = require('./clawdbot-gateway-client');
 
 let wss = null;
 let agentStatusInterval = null;
+const gateway = getGatewayClient();
+
+// Fallback mock data
+let useMock = false;
+const mockAgents = [
+  {
+    id: 'agent-main-001',
+    label: 'main',
+    status: 'running',
+    model: 'claude-sonnet-4-5',
+    created: Date.now() - 3600000,
+    lastActivity: Date.now() - 300000
+  }
+];
+
+gateway.on('connected', () => {
+  console.log('✅ WebSocket using real Gateway');
+  useMock = false;
+  broadcastAgentStatus();
+});
+
+gateway.on('disconnected', () => {
+  console.log('⚠️  Gateway disconnected, using mock data');
+  useMock = true;
+});
+
+// Forward Gateway session updates to WebSocket clients
+gateway.on('session:update', (data) => {
+  broadcastAgentStatus();
+});
 
 function setupWebSocket(websocketServer) {
   wss = websocketServer;
@@ -49,7 +73,6 @@ function handleWebSocketMessage(ws, data) {
       break;
     
     case 'subscribe':
-      // Could implement channel-based subscriptions here
       ws.send(JSON.stringify({ type: 'subscribed', channels: payload.channels }));
       break;
 
@@ -62,8 +85,13 @@ async function broadcastAgentStatus() {
   if (!wss) return;
 
   try {
-    const { stdout } = await execAsync('clawdbot sessions list --json');
-    const sessions = JSON.parse(stdout);
+    let sessions;
+    
+    if (useMock || !gateway.connected) {
+      sessions = mockAgents;
+    } else {
+      sessions = await gateway.listSessions();
+    }
 
     const message = JSON.stringify({
       type: 'agent:status',
@@ -116,6 +144,10 @@ function broadcastActivity(activity) {
 function cleanup() {
   if (agentStatusInterval) {
     clearInterval(agentStatusInterval);
+  }
+  
+  if (gateway) {
+    gateway.disconnect();
   }
 }
 
