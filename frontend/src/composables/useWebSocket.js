@@ -21,9 +21,12 @@ let reconnectTimeout = null
 
 export function useWebSocket() {
   const connect = () => {
-    // For now, use a placeholder WebSocket URL
-    // In production, this would be: ws://your-backend-url/ws
-    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080/ws'
+    // Get JWT token for authenticated WebSocket connection
+    const token = localStorage.getItem('mission_control_token')
+    const wsBaseUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080'
+    
+    // Append token as query parameter
+    const wsUrl = token ? `${wsBaseUrl}/ws?token=${token}` : `${wsBaseUrl}/ws`
     
     try {
       ws.value = new WebSocket(wsUrl)

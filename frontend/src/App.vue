@@ -50,7 +50,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useWebSocket } from './composables/useWebSocket'
 import LoginScreen from './components/LoginScreen.vue'
 import SquadLeaderPanel from './components/SquadLeaderPanel.vue'
@@ -59,6 +59,22 @@ import KanbanBoard from './components/KanbanBoard.vue'
 import ActivityFeed from './components/ActivityFeed.vue'
 
 const authenticated = ref(false)
+const authToken = ref(null)
+
+// Check for existing valid token on mount
+onMounted(() => {
+  const token = localStorage.getItem('mission_control_token')
+  const expires = localStorage.getItem('mission_control_token_expires')
+  
+  if (token && expires && Date.now() < parseInt(expires)) {
+    authToken.value = token
+    authenticated.value = true
+  } else {
+    // Clear expired token
+    localStorage.removeItem('mission_control_token')
+    localStorage.removeItem('mission_control_token_expires')
+  }
+})
 
 const {
   connected,
@@ -82,12 +98,16 @@ watch(activeAgentsCount, (newCount) => {
   squadLeader.value.activeAgents = newCount
 }, { immediate: true })
 
-const handleLogin = () => {
+const handleLogin = (token) => {
+  authToken.value = token
   authenticated.value = true
 }
 
 const handleLogout = () => {
   authenticated.value = false
+  authToken.value = null
+  localStorage.removeItem('mission_control_token')
+  localStorage.removeItem('mission_control_token_expires')
 }
 </script>
 

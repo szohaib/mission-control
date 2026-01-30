@@ -22,8 +22,9 @@
           {{ error }}
         </div>
         
-        <button type="submit" class="btn-primary w-full">
-          🚀 INITIALIZE MISSION CONTROL
+        <button type="submit" class="btn-primary w-full" :disabled="loading">
+          <span v-if="loading">⏳ Authenticating...</span>
+          <span v-else>🚀 INITIALIZE MISSION CONTROL</span>
         </button>
       </form>
       
@@ -40,17 +41,47 @@ import { ref } from 'vue'
 const emit = defineEmits(['login'])
 const password = ref('')
 const error = ref('')
+const loading = ref(false)
 
-const handleLogin = () => {
-  // Simple password check - in production, this would hit an API
-  const validPassword = import.meta.env.VITE_PASSWORD || 'mission-control'
-  
-  if (password.value === validPassword) {
-    emit('login')
-    error.value = ''
-  } else {
-    error.value = '❌ Invalid access code'
+const handleLogin = async () => {
+  if (!password.value) {
+    error.value = '❌ Please enter access code'
+    return
+  }
+
+  loading.value = true
+  error.value = ''
+
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const response = await fetch(`${apiUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ password: password.value })
+    })
+
+    const data = await response.json()
+
+    if (response.ok && data.token) {
+      // Store JWT token in localStorage
+      localStorage.setItem('mission_control_token', data.token)
+      localStorage.setItem('mission_control_token_expires', Date.now() + (data.expiresIn * 1000))
+      
+      // Emit login event with token
+      emit('login', data.token)
+      error.value = ''
+    } else {
+      error.value = '❌ ' + (data.message || 'Invalid access code')
+      password.value = ''
+    }
+  } catch (err) {
+    console.error('Login error:', err)
+    error.value = '❌ Connection failed. Please try again.'
     password.value = ''
+  } finally {
+    loading.value = false
   }
 }
 </script>

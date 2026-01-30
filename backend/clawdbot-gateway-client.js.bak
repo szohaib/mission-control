@@ -1,0 +1,217 @@
+/**
+ * Clawdbot Gateway WebSocket Client
+ * Connects to the local Clawdbot Gateway and provides an HTTP-like interface
+ */
+
+const WebSocket = require('ws');
+const EventEmitter = require('events');
+
+class ClawdbotGatewayClient extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    
+    this.gatewayUrl = options.gatewayUrl || 'ws://127.0.0.1:18789';
+    this.authToken = options.authToken || process.env.CLAWDBOT_GATEWAY_TOKEN;
+    this.ws = null;
+    this.connected = false;
+    this.reconnectInterval = options.reconnectInterval || 5000;
+    this.requestId = 0;
+    this.pendingRequests = new Map();
+    
+    // Cache for session data
+    this.sessionsCache = [];
+    this.lastUpdate = 0;
+  }
+
+  connect() {
+    return new Promise((resolve, reject) => {
+      console.log(`🔌 Connecting to Clawdbot Gateway at ${this.gatewayUrl}...`);
+      
+      const wsUrl = this.authToken 
+        ? `${this.gatewayUrl}?token=${this.authToken}`
+        : this.gatewayUrl;
+
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.on('open', () => {
+        console.log('✅ Connected to Clawdbot Gateway');
+        this.connected = true;
+        this.emit('connected');
+        
+        // Subscribe to session updates
+        this.send({
+          method: 'subscribe',
+          params: { events: ['session:*', 'agent:*'] }
+        });
+        
+        resolve();
+      });
+
+      this.ws.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          this.handleMessage(message);
+        } catch (error) {
+          console.error('Failed to parse Gateway message:', error);
+        }
+      });
+
+      this.ws.on('error', (error) => {
+        console.error('Gateway WebSocket error:', error);
+        this.emit('error', error);
+        reject(error);
+      });
+
+      this.ws.on('close', () => {
+        console.log('❌ Disconnected from Clawdbot Gateway');
+        this.connected = false;
+        this.emit('disconnected');
+        
+        // Auto-reconnect
+        setTimeout(() => {
+          if (!this.connected) {
+            this.connect().catch(console.error);
+          }
+        }, this.reconnectInterval);
+      });
+    });
+  }
+
+  handleMessage(message) {
+    // Handle RPC responses
+    if (message.id && this.pendingRequests.has(message.id)) {
+      const { resolve, reject } = this.pendingRequests.get(message.id);
+      this.pendingRequests.delete(message.id);
+      
+      if (message.error) {
+        reject(new Error(message.error.message || 'Gateway error'));
+      } else {
+        resolve(message.result);
+      }
+      return;
+    }
+
+    // Handle events
+    if (message.method && message.method.startsWith('session:')) {
+      this.emit('session:update', message.params);
+      // Invalidate cache
+      this.lastUpdate = Date.now();
+    }
+
+    // Emit all messages
+    this.emit('message', message);
+  }
+
+  send(message) {
+    if (!this.connected) {
+      throw new Error('Not connected to Gateway');
+    }
+
+    const id = ++this.requestId;
+    const payload = { id, jsonrpc: '2.0', ...message };
+    
+    return new Promise((resolve, reject) => {
+      this.pendingRequests.set(id, { resolve, reject });
+      
+      this.ws.send(JSON.stringify(payload), (error) => {
+        if (error) {
+          this.pendingRequests.delete(id);
+          reject(error);
+        }
+      });
+
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id);
+          reject(new Error('Request timeout'));
+        }
+      }, 30000);
+    });
+  }
+
+  async listSessions() {
+    try {
+      const result = await this.send({
+        method: 'sessions.list',
+        params: {}
+      });
+      
+      this.sessionsCache = result || [];
+      this.lastUpdate = Date.now();
+      
+      return this.sessionsCache;
+    } catch (error) {
+      console.error('Error listing sessions:', error);
+      // Return cached data if available
+      return this.sessionsCache;
+    }
+  }
+
+  async getSession(sessionId) {
+    const result = await this.send({
+      method: 'sessions.get',
+      params: { sessionId }
+    });
+    return result;
+  }
+
+  async spawnSession(params) {
+    const result = await this.send({
+      method: 'sessions.spawn',
+      params
+    });
+    return result;
+  }
+
+  async killSession(sessionId) {
+    const result = await this.send({
+      method: 'sessions.kill',
+      params: { sessionId }
+    });
+    return result;
+  }
+
+  async sendMessage(sessionId, message) {
+    const result = await this.send({
+      method: 'sessions.send',
+      params: { sessionId, message }
+    });
+    return result;
+  }
+
+  async getTranscript(sessionId) {
+    const result = await this.send({
+      method: 'sessions.transcript',
+      params: { sessionId }
+    });
+    return result;
+  }
+
+  disconnect() {
+    if (this.ws) {
+      this.connected = false;
+      this.ws.close();
+    }
+  }
+}
+
+// Singleton instance
+let gatewayClient = null;
+
+function getGatewayClient() {
+  if (!gatewayClient) {
+    const gatewayUrl = process.env.CLAWDBOT_GATEWAY_URL || 'ws://127.0.0.1:18789';
+    gatewayClient = new ClawdbotGatewayClient({ gatewayUrl });
+    
+    // Auto-connect
+    gatewayClient.connect().catch((error) => {
+      console.error('Failed to connect to Gateway:', error);
+      console.log('⚠️  Falling back to mock data');
+    });
+  }
+  
+  return gatewayClient;
+}
+
+module.exports = { ClawdbotGatewayClient, getGatewayClient };
