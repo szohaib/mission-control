@@ -1,0 +1,10 @@
+{
+  "name": "mission-control",
+  "version": "0.1.0",
+  "scripts": {
+    "deploy": "gh-pages -d frontend/dist"
+  },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
+  }
+}
