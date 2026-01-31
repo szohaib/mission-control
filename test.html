@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mission Control Test</title>
+</head>
+<body>
+    <h1>Mission Control WebSocket Test</h1>
+    <button onclick="testWebSocket()">Test WebSocket Connection</button>
+    <div id="output"></div>
+
+    <script>
+        async function testWebSocket() {
+            const output = document.getElementById('output');
+            
+            // First, get auth token
+            try {
+                output.innerHTML += '<p>Getting auth token...</p>';
+                const loginResponse = await fetch('http://localhost:3001/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: 'admin123' })
+                });
+                
+                const loginData = await loginResponse.json();
+                output.innerHTML += `<p>Got token: ${loginData.token.substring(0, 20)}...</p>`;
+                
+                // Now test WebSocket
+                output.innerHTML += '<p>Connecting to WebSocket...</p>';
+                const ws = new WebSocket(`ws://localhost:3001?token=${loginData.token}`);
+                
+                ws.onopen = () => {
+                    output.innerHTML += '<p style="color: green;">✅ WebSocket connected!</p>';
+                    ws.send(JSON.stringify({ type: 'ping' }));
+                };
+                
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    output.innerHTML += `<p>📨 Received: ${data.type}</p>`;
+                    console.log('Received:', data);
+                };
+                
+                ws.onerror = (error) => {
+                    output.innerHTML += '<p style="color: red;">❌ WebSocket error</p>';
+                    console.error('WebSocket error:', error);
+                };
+                
+                ws.onclose = (event) => {
+                    output.innerHTML += `<p style="color: orange;">🔌 WebSocket closed: ${event.code} ${event.reason}</p>`;
+                };
+                
+            } catch (error) {
+                output.innerHTML += `<p style="color: red;">❌ Error: ${error.message}</p>`;
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
